@@ -85,7 +85,7 @@ pub fn setup_render_pipeline(
     render_pipeline
 }
 
-pub async fn run(file_path: &str, d_samples: usize, offset: f32) {
+pub async fn run(file_path: &str, passes: usize, offset: f32) {
     
     // wgpu setup, keep everything default unless required
     let instance = wgpu::Instance::default();
@@ -112,7 +112,7 @@ pub async fn run(file_path: &str, d_samples: usize, offset: f32) {
     let mut texture_array: Vec<wgpu::Texture> = Vec::new();
     texture_array.push(setup_textures(&device, "Image", (image_width, image_height)));
 
-    for i in 0..d_samples {
+    for i in 0..passes {
         let c_width = (image_width >> (i + 1)).max(1);
         let c_height = (image_height >> (i + 1)).max(1);
         texture_array.push(setup_textures(&device, &format!("Level_{}", i + 1), (c_width, c_height)));
@@ -190,7 +190,7 @@ pub async fn run(file_path: &str, d_samples: usize, offset: f32) {
         ..Default::default()
     });
 
-    for i in 0..d_samples {
+    for i in 0..passes {
 
         // destination texture dimensions
         let w = (image_width >> (i + 1)).max(1) as f32;
@@ -247,7 +247,7 @@ pub async fn run(file_path: &str, d_samples: usize, offset: f32) {
         render_pass.draw(0..3, 0..1);
     }
 
-    for j in (0..d_samples).rev() {
+    for j in (0..passes).rev() {
         let w = (image_width >> j).max(1) as f32;
         let h = (image_height >> j).max(1) as f32;
 
