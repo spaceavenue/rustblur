@@ -2,32 +2,34 @@ use image;
 use wgpu;
 
 fn get_image_data(file_path: &str) -> image::ImageBuffer<image::Rgba<u8>, Vec<u8>> {
-    let image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> = image::open(file_path).expect("Failed to open file.").to_rgba8();
+    let image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> = image::open(file_path)
+        .expect("Failed to open file.")
+        .to_rgba8();
     image
 }
 
 pub fn setup_textures(
-    device: &wgpu::Device, 
+    device: &wgpu::Device,
     label: &str,
-    (width, height): (u32, u32)
+    (width, height): (u32, u32),
 ) -> wgpu::Texture {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: width,
-                height: height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::TEXTURE_BINDING,
-            label: Some(label),
-            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
-        });
+        size: wgpu::Extent3d {
+            width: width,
+            height: height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+        label: Some(label),
+        view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+    });
     texture
 }
 
@@ -36,22 +38,21 @@ pub fn setup_render_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     shader: &wgpu::ShaderModule,
     texture_format: wgpu::TextureFormat,
-    entry_point: &str
+    entry_point: &str,
 ) -> wgpu::RenderPipeline {
+    let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Render Pipeline Layout"),
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        immediate_size: 0,
+    });
 
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Downsample Pipeline"),
         layout: Some(&render_pipeline_layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_main"), 
-            buffers: &[], 
+            entry_point: Some("vs_main"),
+            buffers: &[],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
@@ -75,27 +76,34 @@ pub fn setup_render_pipeline(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState {
-            count: 1, 
-            mask: !0, 
-            alpha_to_coverage_enabled: false, 
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
         },
-        multiview_mask: None, 
-        cache: None, 
+        multiview_mask: None,
+        cache: None,
     });
     render_pipeline
 }
 
 pub async fn run(file_path: &str, passes: usize, offset: f32) {
-    
     // wgpu setup, keep everything default unless required
     let instance = wgpu::Instance::default();
 
-    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .unwrap();
 
-    let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor::default()).await.unwrap();
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor::default())
+        .await
+        .unwrap();
 
+    // get image data
     let mut image_bytes = get_image_data(file_path);
-    
+
+    // alpha
     for pixel in image_bytes.pixels_mut() {
         let alpha = pixel[3] as f32 / 255.0;
         pixel[0] = (pixel[0] as f32 * alpha) as u8;
@@ -106,18 +114,26 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
     // image dimenstions
     let image_width = image_bytes.width();
     let image_height = image_bytes.height();
-    
+
     let padded_width_in_bytes = (4 * image_width) + 255 & !255;
-    
+
     let mut texture_array: Vec<wgpu::Texture> = Vec::new();
-    texture_array.push(setup_textures(&device, "Image", (image_width, image_height)));
+    texture_array.push(setup_textures(
+        &device,
+        "Image",
+        (image_width, image_height),
+    ));
 
     for i in 0..passes {
         let c_width = (image_width >> (i + 1)).max(1);
         let c_height = (image_height >> (i + 1)).max(1);
-        texture_array.push(setup_textures(&device, &format!("Level_{}", i + 1), (c_width, c_height)));
+        texture_array.push(setup_textures(
+            &device,
+            &format!("Level_{}", i + 1),
+            (c_width, c_height),
+        ));
     }
-    
+
     let texture_size = texture_array[0].size();
     let texture_format = texture_array[0].format();
 
@@ -138,10 +154,10 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
     struct BlurParams {
         halfpixel: [f32; 2],
         offset: f32,
-        _padding: u32 //to pad buffer to 16 bytes
+        _padding: u32, //to pad buffer to 16 bytes
     }
 
-    let blur_params_buffer = device.create_buffer(&wgpu::BufferDescriptor{
+    let blur_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Parameter buffer"),
         size: std::mem::size_of::<BlurParams>() as u64,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -169,19 +185,33 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
             wgpu::BindGroupLayoutEntry {
                 binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
-                count: None
-            }
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
         label: Some("Texture Bind Group Layout"),
     });
 
     let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
 
-    let pipeline_down = setup_render_pipeline(&device, &bind_group_layout, &shader, texture_format, "fs_down");
-    let pipeline_up = setup_render_pipeline(&device, &bind_group_layout, &shader, texture_format, "fs_up");
-    
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let pipeline_down = setup_render_pipeline(
+        &device,
+        &bind_group_layout,
+        &shader,
+        texture_format,
+        "fs_down",
+    );
+    let pipeline_up = setup_render_pipeline(
+        &device,
+        &bind_group_layout,
+        &shader,
+        texture_format,
+        "fs_up",
+    );
 
     let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         mag_filter: wgpu::FilterMode::Linear,
@@ -191,98 +221,131 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
     });
 
     for i in 0..passes {
+        // here:
+        // i -> src texture
+        // (i + 1) -> dest texture
 
-        // destination texture dimensions
-        let w = (image_width >> (i + 1)).max(1) as f32;
-        let h = (image_height >> (i + 1)).max(1) as f32;
+        // destination texture dimensions, needed for setting viewport size and half-pixel
+        // calculation
+        let dest_w = (image_width >> (i + 1)).max(1) as f32;
+        let dest_h = (image_height >> (i + 1)).max(1) as f32;
 
         let blur_params = BlurParams {
-            halfpixel: [0.5/w, 0.5/h],
+            halfpixel: [0.5 / dest_w, 0.5 / dest_h],
             offset: offset,
-            _padding: 0
+            _padding: 0,
         };
 
+        // create the command encoder for this pass, will accept commands, turn them into a buffer,
+        // and send to the gpu for exec at the end
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        // write the data of blur params to uniform buffer will be submitted to gpu at the end of
+        // the pass
         queue.write_buffer(&blur_params_buffer, 0, bytemuck::cast_slice(&[blur_params]));
+        {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Texture Bind Group"),
+                layout: &bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(
+                            &texture_array[i].create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&texture_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: blur_params_buffer.as_entire_binding(),
+                    },
+                ],
+            });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Texture Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_array[i].create_view(&wgpu::TextureViewDescriptor::default())),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&texture_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: blur_params_buffer.as_entire_binding()
-                }
-            ],
-        });
-
-        let render_pass_desc = wgpu::RenderPassDescriptor {
-            label: Some("Render Pass"),
-            color_attachments: &[
-                Some(wgpu::RenderPassColorAttachment {
-                    view: &texture_array[i + 1].create_view(&wgpu::TextureViewDescriptor::default()),
+            let render_pass_desc = wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &texture_array[i + 1]
+                        .create_view(&wgpu::TextureViewDescriptor::default()),
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
-                })
-            ],
-            ..Default::default()
-        };
+                })],
+                ..Default::default()
+            };
 
-        let mut render_pass = encoder.begin_render_pass(&render_pass_desc);
+            // start recording the render pass to the command encoder will be submitted at the end
+            // of the pass
+            let mut render_pass = encoder.begin_render_pass(&render_pass_desc);
+            render_pass.set_pipeline(&pipeline_down);
+            render_pass.set_bind_group(0, &bind_group, &[]);
+            render_pass.set_viewport(0., 0., dest_w, dest_h, 0., 0.);
+            render_pass.draw(0..3, 0..1);
+        }
 
-        render_pass.set_pipeline(&pipeline_down);
-        render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.set_viewport(0., 0., w, h, 0., 0.);
-        render_pass.draw(0..3, 0..1);
+        // write the command buffer with our render pass to the queue and submit for exec. important
+        // that we do it at the end of every pass and not at once, otherwise the blur_params data
+        // will keep overwriting the buffer after each pass, resulting in only the last one being
+        // read by the gpu
+        queue.submit(Some(encoder.finish()));
     }
 
     for j in (0..passes).rev() {
-        let w = (image_width >> j).max(1) as f32;
-        let h = (image_height >> j).max(1) as f32;
+        // here:
+        // (j + 1) -> src texture
+        // j -> dest texture
+
+        // source texture dimensions, needed for half-pixel calculations
+        let src_w = (image_width >> (j + 1)) as f32;
+        let src_h = (image_height >> (j + 1)) as f32;
+
+        // destination texture dimensions, needed for setting viewport size
+        let dest_w = (image_width >> j).max(1) as f32;
+        let dest_h = (image_height >> j).max(1) as f32;
 
         let blur_params = BlurParams {
-            //upsampling requires source, aka (j + 1)th, dimensions 
-            halfpixel: [0.5/(image_width >> (j + 1)) as f32, 0.5/(image_height >> (j + 1)) as f32],
+            halfpixel: [0.5 / src_w, 0.5 / src_h],
             offset: offset,
-            _padding: 0
+            _padding: 0,
         };
 
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
         queue.write_buffer(&blur_params_buffer, 0, bytemuck::cast_slice(&[blur_params]));
+        {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Texture Bind Group"),
+                layout: &bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(
+                            &texture_array[j + 1]
+                                .create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&texture_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: blur_params_buffer.as_entire_binding(),
+                    },
+                ],
+            });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Texture Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_array[j + 1].create_view(&wgpu::TextureViewDescriptor::default())),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&texture_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: blur_params_buffer.as_entire_binding()
-                }
-            ],
-        });
-
-        let render_pass_desc = wgpu::RenderPassDescriptor {
-            label: Some("Render Pass"),
-            color_attachments: &[
-                Some(wgpu::RenderPassColorAttachment {
+            let render_pass_desc = wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &texture_array[j].create_view(&wgpu::TextureViewDescriptor::default()),
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -290,18 +353,22 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
-                })
-            ],
-            ..Default::default()
-        };
+                })],
+                ..Default::default()
+            };
 
-        let mut render_pass = encoder.begin_render_pass(&render_pass_desc);
+            let mut render_pass = encoder.begin_render_pass(&render_pass_desc);
 
-        render_pass.set_pipeline(&pipeline_up);
-        render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.set_viewport(0., 0., w, h, 0., 0.);
-        render_pass.draw(0..3, 0..1);
+            render_pass.set_pipeline(&pipeline_up);
+            render_pass.set_bind_group(0, &bind_group, &[]);
+            render_pass.set_viewport(0., 0., dest_w, dest_h, 0., 0.);
+            render_pass.draw(0..3, 0..1);
+        }
+        queue.submit(Some(encoder.finish()));
     }
+
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
     let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         size: (padded_width_in_bytes * image_height) as wgpu::BufferAddress,
@@ -309,7 +376,7 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
         label: None,
         mapped_at_creation: false,
     });
-    
+
     encoder.copy_texture_to_buffer(
         texture_array[0].as_image_copy(),
         wgpu::TexelCopyBufferInfo {
@@ -317,17 +384,19 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_width_in_bytes),
-                rows_per_image: Some(image_height)
+                rows_per_image: Some(image_height),
             },
         },
-        texture_array[0].size()
+        texture_array[0].size(),
     );
     queue.submit(Some(encoder.finish()));
 
     let buffer_slice = output_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     {
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| { tx.send(result).unwrap(); });
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
 
@@ -335,7 +404,8 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
 
         use image::{ImageBuffer, Rgba};
         let buffer =
-            ImageBuffer::<Rgba<u8>, _>::from_raw(padded_width_in_bytes/4, image_height, data).unwrap();
+            ImageBuffer::<Rgba<u8>, _>::from_raw(padded_width_in_bytes / 4, image_height, data)
+                .unwrap();
         buffer.save("image.png").unwrap();
     }
     output_buffer.unmap();

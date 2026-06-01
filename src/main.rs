@@ -1,4 +1,5 @@
 use std::env;
+
 use rustblur::run;
 
 fn main() {

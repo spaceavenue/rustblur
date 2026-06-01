@@ -59,7 +59,6 @@ fn fs_down(in: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_up(in: VertexOutput) -> @location(0) vec4<f32> {
-    
     /* Dual Kawase upsample: sample corners + 4 pixels */
 
     let uv = vec2f(in.texel_coords);
