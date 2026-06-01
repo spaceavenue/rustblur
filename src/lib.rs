@@ -220,6 +220,7 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
         ..Default::default()
     });
 
+    // downsample loop
     for i in 0..passes {
         // here:
         // i -> src texture
@@ -238,7 +239,7 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
 
         // create the command encoder for this pass, will accept commands, turn them into a buffer,
         // and send to the gpu for exec at the end
-        let mut encoder =
+        let mut down_encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         // write the data of blur params to uniform buffer will be submitted to gpu at the end of
@@ -283,7 +284,7 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
 
             // start recording the render pass to the command encoder will be submitted at the end
             // of the pass
-            let mut render_pass = encoder.begin_render_pass(&render_pass_desc);
+            let mut render_pass = down_encoder.begin_render_pass(&render_pass_desc);
             render_pass.set_pipeline(&pipeline_down);
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.set_viewport(0., 0., dest_w, dest_h, 0., 0.);
@@ -294,9 +295,10 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
         // that we do it at the end of every pass and not at once, otherwise the blur_params data
         // will keep overwriting the buffer after each pass, resulting in only the last one being
         // read by the gpu
-        queue.submit(Some(encoder.finish()));
+        queue.submit(Some(down_encoder.finish()));
     }
 
+    // upsample loop
     for j in (0..passes).rev() {
         // here:
         // (j + 1) -> src texture
@@ -316,7 +318,7 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
             _padding: 0,
         };
 
-        let mut encoder =
+        let mut up_encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         queue.write_buffer(&blur_params_buffer, 0, bytemuck::cast_slice(&[blur_params]));
@@ -357,17 +359,17 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
                 ..Default::default()
             };
 
-            let mut render_pass = encoder.begin_render_pass(&render_pass_desc);
+            let mut render_pass = up_encoder.begin_render_pass(&render_pass_desc);
 
             render_pass.set_pipeline(&pipeline_up);
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.set_viewport(0., 0., dest_w, dest_h, 0., 0.);
             render_pass.draw(0..3, 0..1);
         }
-        queue.submit(Some(encoder.finish()));
+        queue.submit(Some(up_encoder.finish()));
     }
 
-    let mut encoder =
+    let mut out_encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
     let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -377,7 +379,7 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
         mapped_at_creation: false,
     });
 
-    encoder.copy_texture_to_buffer(
+    out_encoder.copy_texture_to_buffer(
         texture_array[0].as_image_copy(),
         wgpu::TexelCopyBufferInfo {
             buffer: &output_buffer,
@@ -389,7 +391,7 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
         },
         texture_array[0].size(),
     );
-    queue.submit(Some(encoder.finish()));
+    queue.submit(Some(out_encoder.finish()));
 
     let buffer_slice = output_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
