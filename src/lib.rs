@@ -115,21 +115,15 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
     let image_width = image_bytes.width();
     let image_height = image_bytes.height();
 
-    let padded_width_in_bytes = (4 * image_width) + 255 & !255;
-
+    // setup textures/mip chain, each texture half the size of the last. theres a way to do this
+    // with actual mip chains but a vec of textures works too. first level (0) is the image itself.
     let mut texture_array: Vec<wgpu::Texture> = Vec::new();
-    texture_array.push(setup_textures(
-        &device,
-        "Image",
-        (image_width, image_height),
-    ));
-
-    for i in 0..passes {
-        let c_width = (image_width >> (i + 1)).max(1);
-        let c_height = (image_height >> (i + 1)).max(1);
+    for i in 0..passes + 1 {
+        let c_width = (image_width >> i).max(1);
+        let c_height = (image_height >> i).max(1);
         texture_array.push(setup_textures(
             &device,
-            &format!("Level_{}", i + 1),
+            &format!("Level_{}", i),
             (c_width, c_height),
         ));
     }
@@ -137,7 +131,7 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
     let texture_size = texture_array[0].size();
     let texture_format = texture_array[0].format();
 
-    // loading initial pixel data from image into texture
+    // loading initial pixel data from image into texture level 0
     queue.write_texture(
         texture_array[0].as_image_copy(),
         &image_bytes,
@@ -360,7 +354,6 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
             };
 
             let mut render_pass = up_encoder.begin_render_pass(&render_pass_desc);
-
             render_pass.set_pipeline(&pipeline_up);
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.set_viewport(0., 0., dest_w, dest_h, 0., 0.);
@@ -369,9 +362,13 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
         queue.submit(Some(up_encoder.finish()));
     }
 
+    // for padding out the width to multiple of 256, for the output buffer
+    let padded_width_in_bytes = (4 * image_width) + 255 & !255;
+
     let mut out_encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
+    // output buffer to hold our image
     let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         size: (padded_width_in_bytes * image_height) as wgpu::BufferAddress,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
@@ -379,6 +376,7 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
         mapped_at_creation: false,
     });
 
+    // copy data from level 0 texture to the buffer
     out_encoder.copy_texture_to_buffer(
         texture_array[0].as_image_copy(),
         wgpu::TexelCopyBufferInfo {
@@ -393,6 +391,7 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
     );
     queue.submit(Some(out_encoder.finish()));
 
+    // writing output to image.png
     let buffer_slice = output_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     {
