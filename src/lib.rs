@@ -1,12 +1,5 @@
-use image;
+use image::{ImageBuffer, Rgba};
 use wgpu;
-
-fn get_image_data(file_path: &str) -> image::ImageBuffer<image::Rgba<u8>, Vec<u8>> {
-    let image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> = image::open(file_path)
-        .expect("Failed to open file.")
-        .to_rgba8();
-    image
-}
 
 pub fn setup_textures(
     device: &wgpu::Device,
@@ -86,22 +79,25 @@ pub fn setup_render_pipeline(
     render_pipeline
 }
 
-pub async fn run(file_path: &str, passes: usize, offset: f32) {
+pub async fn run(
+    file_path: &str,
+    passes: usize,
+    offset: f32,
+    output_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // wgpu setup, keep everything default unless required
     let instance = wgpu::Instance::default();
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
-        .await
-        .unwrap();
+        .await?;
 
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor::default())
-        .await
-        .unwrap();
+        .await?;
 
     // get image data
-    let mut image_bytes = get_image_data(file_path);
+    let mut image_bytes = image::open(file_path)?.to_rgba8();
 
     // alpha
     for pixel in image_bytes.pixels_mut() {
@@ -215,11 +211,10 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
     });
 
     // downsample loop
+    // here:
+    // i -> src texture
+    // (i + 1) -> dest texture
     for i in 0..passes {
-        // here:
-        // i -> src texture
-        // (i + 1) -> dest texture
-
         // destination texture dimensions, needed for setting viewport size and half-pixel
         // calculation
         let dest_w = (image_width >> (i + 1)).max(1) as f32;
@@ -231,12 +226,12 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
             _padding: 0,
         };
 
-        // create the command encoder for this pass, will accept commands, turn them into a buffer,
+        // create the command encoder for this pass. will accept commands, turn them into a buffer,
         // and send to the gpu for exec at the end
         let mut down_encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        // write the data of blur params to uniform buffer will be submitted to gpu at the end of
+        // write the data of blur params to uniform buffer, will be submitted to gpu at the end of
         // the pass
         queue.write_buffer(&blur_params_buffer, 0, bytemuck::cast_slice(&[blur_params]));
         {
@@ -293,11 +288,10 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
     }
 
     // upsample loop
+    // here:
+    // (j + 1) -> src texture
+    // j -> dest texture
     for j in (0..passes).rev() {
-        // here:
-        // (j + 1) -> src texture
-        // j -> dest texture
-
         // source texture dimensions, needed for half-pixel calculations
         let src_w = (image_width >> (j + 1)) as f32;
         let src_h = (image_height >> (j + 1)) as f32;
@@ -395,19 +389,26 @@ pub async fn run(file_path: &str, passes: usize, offset: f32) {
     let buffer_slice = output_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     {
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            tx.send(result).unwrap();
-        });
-        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        rx.recv().unwrap().unwrap();
+        buffer_slice.map_async(
+            wgpu::MapMode::Read,
+            move |result: Result<(), wgpu::BufferAsyncError>| {
+                let _ = tx.send(result);
+            },
+        );
+        device.poll(wgpu::PollType::wait_indefinitely())?;
+        let _ = rx.recv();
 
         let data = buffer_slice.get_mapped_range();
-
-        use image::{ImageBuffer, Rgba};
-        let buffer =
-            ImageBuffer::<Rgba<u8>, _>::from_raw(padded_width_in_bytes / 4, image_height, data)
-                .unwrap();
-        buffer.save("image.png").unwrap();
+        let mut unpadded_data = Vec::<u8>::with_capacity((4 * image_width) as usize);
+        data.chunks_exact((padded_width_in_bytes) as usize)
+            .for_each(|chunk| {
+                unpadded_data.extend_from_slice(&chunk[..(4 * image_width) as usize])
+            });
+        let buffer = ImageBuffer::<Rgba<u8>, _>::from_raw(image_width, image_height, unpadded_data)
+            .ok_or("Unable to create image buffer.")?;
+        buffer.save_with_format(output_path, image::ImageFormat::Png)?;
     }
     output_buffer.unmap();
+
+    Ok(())
 }

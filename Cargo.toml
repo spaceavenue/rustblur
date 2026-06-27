@@ -8,3 +8,10 @@ bytemuck = "1.25.0"
 image = "0.25.10"
 pollster = "0.4.0"
 wgpu = "29.0.3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+debug = "none"
+strip = "symbols"
+panic = "abort"
