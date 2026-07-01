@@ -1,17 +1,20 @@
+cargo-features = ["panic-immediate-abort"]
 [package]
 name = "rustblur"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bytemuck = "1.25.0"
-image = "0.25.10"
-pollster = "0.4.0"
-wgpu = "29.0.3"
+image = {version = "0.25.10", default-features = false, features=["png"]}
+rayon = { version = "1.12.0", optional = true }
 
 [profile.release]
 opt-level = 3
 lto = "thin"
 debug = "none"
 strip = "symbols"
-panic = "abort"
+panic = "immediate-abort"
+
+[features]
+default = ["rayon"]
+rayon = ["dep:rayon"]
