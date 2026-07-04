@@ -36,16 +36,15 @@ struct BlurParams {
     _padding: u32, //to pad buffer to 16 bytes
 }
 
-fn process_images(file_path: &str) -> (Vec<u8>, (u32, u32), u32) {
-    // get image data
-    let mut image_bytes = image::open(file_path)
-        .unwrap_or_else(|e| {
-            eprintln!("Error opening file: {}", e);
-            std::process::exit(1)
-        })
-        .into_rgba8();
+struct InputImage {
+    bytes: Vec<u8>,
+    dims: (u32, u32),
+}
 
-    let now = Instant::now();
+fn process_images(file_path: &str) -> Result<InputImage, Box<dyn Error>> {
+    // get image data
+    let mut image_bytes = image::open(file_path)?.into_rgba8();
+
     // premultiply alpha, in parallel
     image_bytes.par_chunks_mut(4).for_each(|pixel| {
         let alpha = pixel[3] as f32 / 255.0;
@@ -53,15 +52,14 @@ fn process_images(file_path: &str) -> (Vec<u8>, (u32, u32), u32) {
         pixel[1] = (pixel[1] as f32 * alpha) as u8;
         pixel[2] = (pixel[2] as f32 * alpha) as u8;
     });
-    println!("alpha premult: {:?}", now.elapsed());
 
     // image dimenstions
     let image_dims = image_bytes.dimensions();
 
-    // for padding out the width to multiple of 256, for the output buffer
-    let padded_width_in_bytes = ((4 * image_dims.0) + 255) & !255;
-
-    (image_bytes.into_raw(), image_dims, padded_width_in_bytes)
+    Ok(InputImage {
+        bytes: image_bytes.into_raw(),
+        dims: image_dims,
+    })
 }
 
 fn setup_textures(
@@ -247,7 +245,7 @@ fn write_output(
     img_dims: (u32, u32),
     padded_width_in_bytes: u32,
     output_path: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     // writing output to image.png
     let buffer_slice = output_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
@@ -288,21 +286,23 @@ pub async fn run(
     // initialize wgpu state
     let state = WgpuState::init().await?;
 
-    let (image_bytes, image_dims, padded_width_in_bytes) = process_images(file_path);
+    let now = Instant::now();
+    let image = process_images(file_path)?;
+    println!("image processing: {:?}", now.elapsed());
 
     // setup textures/mip chain. each texture is half the size of the last. first level (0) is the
     // image itself.
-    let textures = setup_textures(&state, "Blur mip chain", image_dims, passes as u32);
+    let textures = setup_textures(&state, "Blur mip chain", image.dims, passes as u32);
 
     let now = Instant::now();
     // load initial pixel data from image into texture level 0
     state.queue.write_texture(
         textures.as_image_copy(),
-        &image_bytes,
+        &image.bytes,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(4 * image_dims.0),
-            rows_per_image: Some(image_dims.1),
+            bytes_per_row: Some(4 * image.dims.0),
+            rows_per_image: Some(image.dims.1),
         },
         textures.size(),
     );
@@ -329,7 +329,7 @@ pub async fn run(
     });
 
     let alignment = state.device.limits().min_uniform_buffer_offset_alignment as usize;
-    let blur_params_buffer = setup_blur_params(&state, passes, image_dims, offset, alignment);
+    let blur_params_buffer = setup_blur_params(&state, passes, image.dims, offset, alignment);
     println!("sampler + texture views + blur params: {:?}", now.elapsed());
 
     let bind_group_layout =
@@ -398,8 +398,8 @@ pub async fn run(
         //
         // destination texture dimensions, needed for setting viewport size and half-pixel
         // calculation
-        let dst_w = (image_dims.0 >> (i + 1)).max(1) as f32;
-        let dst_h = (image_dims.1 >> (i + 1)).max(1) as f32;
+        let dst_w = (image.dims.0 >> (i + 1)).max(1) as f32;
+        let dst_h = (image.dims.1 >> (i + 1)).max(1) as f32;
 
         blur_pass(
             &state,
@@ -422,8 +422,8 @@ pub async fn run(
         // j -> dst texture
         //
         // destination texture dimensions, needed for setting viewport size
-        let dst_w = (image_dims.0 >> j).max(1) as f32;
-        let dst_h = (image_dims.1 >> j).max(1) as f32;
+        let dst_w = (image.dims.0 >> j).max(1) as f32;
+        let dst_h = (image.dims.1 >> j).max(1) as f32;
 
         blur_pass(
             &state,
@@ -440,9 +440,10 @@ pub async fn run(
         );
     }
 
+    let padded_width_in_bytes = ((4 * image.dims.0) + 255) & !255;
     // output buffer to hold our image
     let output_buffer = state.device.create_buffer(&wgpu::BufferDescriptor {
-        size: (padded_width_in_bytes * image_dims.1) as wgpu::BufferAddress,
+        size: (padded_width_in_bytes * image.dims.1) as wgpu::BufferAddress,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         label: None,
         mapped_at_creation: false,
@@ -456,7 +457,7 @@ pub async fn run(
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_width_in_bytes),
-                rows_per_image: Some(image_dims.1),
+                rows_per_image: Some(image.dims.1),
             },
         },
         textures.size(),
@@ -469,7 +470,7 @@ pub async fn run(
     write_output(
         &state,
         &output_buffer,
-        image_dims,
+        image.dims,
         padded_width_in_bytes,
         output_path,
     )?;
