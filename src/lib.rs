@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::Write;
 use std::time::Instant;
 
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::codecs::qoi::QoiEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use rayon::iter::ParallelIterator;
 use rayon::slice::ParallelSliceMut;
@@ -257,7 +257,7 @@ fn write_output(
         },
     );
     state.device.poll(wgpu::PollType::wait_indefinitely())?;
-    let _ = rx.recv();
+    rx.recv()??;
     let out_image = {
         let data = buffer_slice.get_mapped_range();
         let mut out_image = Vec::<u8>::with_capacity((4 * img_dims.0 * img_dims.1) as usize);
@@ -269,8 +269,7 @@ fn write_output(
     output_buffer.unmap();
 
     let mut buffer = Vec::new();
-    let image_encoder =
-        PngEncoder::new_with_quality(&mut buffer, CompressionType::Fast, FilterType::Paeth);
+    let image_encoder = QoiEncoder::new(&mut buffer);
     image_encoder.write_image(&out_image, img_dims.0, img_dims.1, ExtendedColorType::Rgba8)?;
     File::create(output_path)?.write_all(&buffer)?;
 
