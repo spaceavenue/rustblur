@@ -1,10 +1,8 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufReader, BufWriter};
 use std::time::Instant;
 
-use image::codecs::qoi::QoiEncoder;
-use image::{ExtendedColorType, ImageEncoder};
 use rayon::iter::ParallelIterator;
 use rayon::slice::ParallelSliceMut;
 use wgpu::{DynamicOffset, PowerPreference};
@@ -42,8 +40,10 @@ struct InputImage {
 }
 
 fn process_images(file_path: &str) -> Result<InputImage, Box<dyn Error>> {
-    // get image data
-    let mut image_bytes = image::open(file_path)?.into_rgba8();
+    let mut decoder = qoi::Decoder::from_stream(BufReader::new(File::open(file_path)?))?
+        .with_channels(qoi::Channels::Rgba);
+
+    let mut image_bytes = decoder.decode_to_vec()?;
 
     // premultiply alpha, in parallel
     image_bytes.par_chunks_mut(4).for_each(|pixel| {
@@ -53,12 +53,10 @@ fn process_images(file_path: &str) -> Result<InputImage, Box<dyn Error>> {
         pixel[2] = (pixel[2] as f32 * alpha) as u8;
     });
 
-    // image dimenstions
-    let image_dims = image_bytes.dimensions();
-
+    let header = decoder.header();
     Ok(InputImage {
-        bytes: image_bytes.into_raw(),
-        dims: image_dims,
+        bytes: image_bytes,
+        dims: (header.width, header.height),
     })
 }
 
@@ -258,6 +256,7 @@ fn write_output(
     );
     state.device.poll(wgpu::PollType::wait_indefinitely())?;
     rx.recv()??;
+
     let out_image = {
         let data = buffer_slice.get_mapped_range();
         let mut out_image = Vec::<u8>::with_capacity((4 * img_dims.0 * img_dims.1) as usize);
@@ -267,11 +266,8 @@ fn write_output(
     };
 
     output_buffer.unmap();
-
-    let mut buffer = Vec::new();
-    let image_encoder = QoiEncoder::new(&mut buffer);
-    image_encoder.write_image(&out_image, img_dims.0, img_dims.1, ExtendedColorType::Rgba8)?;
-    File::create(output_path)?.write_all(&buffer)?;
+    let encoder = qoi::Encoder::new(&out_image, img_dims.0, img_dims.1)?;
+    encoder.encode_to_stream(&mut BufWriter::new(File::create(output_path)?))?;
 
     Ok(())
 }
