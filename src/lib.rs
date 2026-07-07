@@ -1,10 +1,10 @@
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::fs::{File, OpenOptions};
 use std::time::Instant;
 
-use rayon::iter::ParallelIterator;
-use rayon::slice::ParallelSliceMut;
+use memmap2::{Mmap, MmapMut};
+use rayon::iter::{IndexedParallelIterator, ParallelIterator};
+use rayon::slice::{ParallelSlice, ParallelSliceMut};
 use wgpu::{DynamicOffset, PowerPreference};
 
 struct WgpuState {
@@ -40,20 +40,11 @@ struct InputImage {
 }
 
 fn process_images(file_path: &str) -> Result<InputImage, Box<dyn Error>> {
-    let mut decoder = qoi::Decoder::from_stream(BufReader::new(File::open(file_path)?))?
-        .with_channels(qoi::Channels::Rgba);
-
-    let mut image_bytes = decoder.decode_to_vec()?;
-
-    // premultiply alpha, in parallel
-    image_bytes.par_chunks_mut(4).for_each(|pixel| {
-        let alpha = pixel[3] as f32 / 255.0;
-        pixel[0] = (pixel[0] as f32 * alpha) as u8;
-        pixel[1] = (pixel[1] as f32 * alpha) as u8;
-        pixel[2] = (pixel[2] as f32 * alpha) as u8;
-    });
-
-    let header = decoder.header();
+    let in_mmap = unsafe { Mmap::map(&File::open(file_path)?)? };
+    let header = qoi::decode_header(&in_mmap)?;
+    let image_bytes = qoi::Decoder::new(&in_mmap)?
+        .with_channels(qoi::Channels::Rgba)
+        .decode_to_vec()?;
     Ok(InputImage {
         bytes: image_bytes,
         dims: (header.width, header.height),
@@ -244,6 +235,7 @@ fn write_output(
     padded_width_in_bytes: u32,
     output_path: &str,
 ) -> Result<(), Box<dyn Error>> {
+    let now = Instant::now();
     // writing output to image.png
     let buffer_slice = output_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
@@ -256,19 +248,48 @@ fn write_output(
     );
     state.device.poll(wgpu::PollType::wait_indefinitely())?;
     rx.recv()??;
+    println!("map buffer: {:?}", now.elapsed());
 
+    let now = Instant::now();
     let out_image = {
         let data = buffer_slice.get_mapped_range();
-        let mut out_image = Vec::<u8>::with_capacity((4 * img_dims.0 * img_dims.1) as usize);
-        data.chunks_exact((padded_width_in_bytes) as usize)
-            .for_each(|chunk| out_image.extend_from_slice(&chunk[..(4 * img_dims.0) as usize]));
+        let width = img_dims.0 as usize;
+        let height = img_dims.1 as usize;
+        // let mut out_image = vec![0u8; 3 * width * height];
+        let mut out_image = Vec::<u8>::with_capacity(3 * width * height);
+        data.par_chunks(padded_width_in_bytes as usize)
+            .zip(out_image.par_chunks_mut(3 * width))
+            .for_each(|(src_row, dst_row)| {
+                dst_row
+                    .chunks_exact_mut(3)
+                    .zip(src_row[..4 * width].chunks_exact(4))
+                    .for_each(|(d, s)| {
+                        d[0] = s[0];
+                        d[1] = s[1];
+                        d[2] = s[2];
+                    });
+            });
         out_image
     };
-
+    println!("{}", out_image.len());
     output_buffer.unmap();
-    let encoder = qoi::Encoder::new(&out_image, img_dims.0, img_dims.1)?;
-    encoder.encode_to_stream(&mut BufWriter::new(File::create(output_path)?))?;
+    println!("process output image: {:?}", now.elapsed());
 
+    let out_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(output_path)?;
+    out_file.set_len(((img_dims.0 * img_dims.1 * 4) + 22) as u64)?;
+    let mut out_mmap = unsafe { MmapMut::map_mut(&out_file)? };
+
+    let now = Instant::now();
+    let encoder = qoi::Encoder::new(&out_image, img_dims.0, img_dims.1)?;
+    encoder.encode_to_buf(&mut out_mmap)?;
+    println!("encoder image: {:?}", now.elapsed());
+
+    out_mmap.flush_async()?;
     Ok(())
 }
 
@@ -283,7 +304,7 @@ pub async fn run(
 
     let now = Instant::now();
     let image = process_images(file_path)?;
-    println!("image processing: {:?}", now.elapsed());
+    println!("process input image: {:?}", now.elapsed());
 
     // setup textures/mip chain. each texture is half the size of the last. first level (0) is the
     // image itself.
@@ -303,7 +324,6 @@ pub async fn run(
     );
     println!("image upload: {:?}", now.elapsed());
 
-    let now = Instant::now();
     // create all our texture views
     let mut texture_views = Vec::new();
     for i in 0..passes + 1 {
@@ -325,7 +345,6 @@ pub async fn run(
 
     let alignment = state.device.limits().min_uniform_buffer_offset_alignment as usize;
     let blur_params_buffer = setup_blur_params(&state, passes, image.dims, offset, alignment);
-    println!("sampler + texture views + blur params: {:?}", now.elapsed());
 
     let bind_group_layout =
         state
@@ -461,7 +480,6 @@ pub async fn run(
     state.queue.submit(Some(encoder.finish()));
     println!("up + down + texture copy: {:?}", now.elapsed());
 
-    let now = Instant::now();
     write_output(
         &state,
         &output_buffer,
@@ -469,7 +487,6 @@ pub async fn run(
         padded_width_in_bytes,
         output_path,
     )?;
-    println!("map buffer + write output: {:?}", now.elapsed());
 
     Ok(())
 }

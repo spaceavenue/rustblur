@@ -5,12 +5,13 @@ edition = "2024"
 
 [dependencies]
 bytemuck = { version = "1.25.0", default-features = false }
-png = "0.18.1"
+memmap2 = "0.9.11"
+# png = "0.18.1"
 pollster = "0.4.0"
 qoi = "0.4.1"
 rayon = "1.12.0"
 wgpu = { version = "29.0.3", default-features = false, features = ["wgsl", "vulkan"] }
-zune-jpeg = "0.5.15"
+# zune-jpeg = "0.5.15"
 
 [profile.release]
 opt-level = 3
