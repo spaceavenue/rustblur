@@ -5,16 +5,15 @@ edition = "2024"
 
 [dependencies]
 bytemuck = { version = "1.25.0", default-features = false }
+image = "0.25.10"
+qoz = { git = "https://github.com/spaceavenue/qoz.git" }
 memmap2 = "0.9.11"
-# png = "0.18.1"
 pollster = "0.4.0"
-qoi = "0.4.1"
 rayon = "1.12.0"
 wgpu = { version = "29.0.3", default-features = false, features = ["wgsl", "vulkan"] }
-# zune-jpeg = "0.5.15"
 
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = "fat"
 strip = "symbols"
 panic = "abort"
