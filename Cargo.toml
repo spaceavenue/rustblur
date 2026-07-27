@@ -5,15 +5,17 @@ edition = "2024"
 
 [dependencies]
 bytemuck = { version = "1.25.0", default-features = false }
-image = "0.25.10"
-qoz = { git = "https://github.com/spaceavenue/qoz.git" }
-memmap2 = "0.9.11"
+image = { version = "0.25.10", default-features = false, features = ["avif-native", "png", "jpeg", "webp", "gif", "bmp", "tiff", "tga", "dds", "exr", "hdr", "ico", "pnm", "qoi", "rayon"] }
+memmap2 = { version = "0.9.11", default-features = false }
 pollster = "0.4.0"
-rayon = "1.12.0"
+qoz = { git = "https://github.com/spaceavenue/qoz.git" }
+rayon = { version = "1.12.0", default-features = false }
 wgpu = { version = "29.0.3", default-features = false, features = ["wgsl", "vulkan"] }
+zstd-sys = { version = "2.0", features = ["pkg-config"] }
 
 [profile.release]
 opt-level = 3
+codegen-units = 1
 lto = "fat"
 strip = "symbols"
 panic = "abort"

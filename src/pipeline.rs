@@ -19,7 +19,7 @@ impl BlurUniforms {
     pub fn new(wgpu_ctx: &WgpuCtx, levels: &[MipLevel], offset: f32) -> Self {
         let alignment = wgpu_ctx.device.limits().min_uniform_buffer_offset_alignment as usize;
         let mut blur_params = Vec::new();
-        for level in &levels[1..] {
+        for level in &levels[0..] {
             let params = BlurParams {
                 halfpixel: [0.5 / level.width as f32, 0.5 / level.height as f32],
                 offset,
